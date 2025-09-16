@@ -11,6 +11,7 @@ export interface TranscriptionResult {
   timestamp: number;
   confidence?: number;
   isFinal: boolean;
+  latency?: number; // Per-utterance latency in milliseconds
 }
 
 export interface TranscriptionMetrics {

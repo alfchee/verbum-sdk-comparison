@@ -11,15 +11,22 @@ import { TranscriptionCard } from '@/components/TranscriptionCard';
 import { BenchmarkVisualization } from '@/components/BenchmarkVisualization';
 import { useAudioRecording } from '@/hooks/useAudioRecording';
 import { VerbumService } from '@/services/verbumService';
+import { useStoreState, useStoreActions } from '@/store/hooks';
 
 const defaultLanguage: Language = SUPPORTED_LANGUAGES[0];
 
 export default function Home() {
   const [selectedLanguage, setSelectedLanguage] = useState<Language>(defaultLanguage);
-  const [deepgramText, setDeepgramText] = useState('');
-  const [verbumText, setVerbumText] = useState('');
-  const [deepgramMetrics, setDeepgramMetrics] = useState({ latency: 0, accuracy: 0 });
-  const [verbumMetrics, setVerbumMetrics] = useState({ latency: 0, accuracy: 0 });
+  
+  // Store state
+  const deepgramText = useStoreState(state => state.deepgram.text);
+  const verbumText = useStoreState(state => state.verbum.text);
+  const deepgramMetrics = useStoreState(state => state.deepgram.metrics);
+  const verbumMetrics = useStoreState(state => state.verbum.metrics);
+  
+  // Store actions
+  const deepgramActions = useStoreActions(actions => actions.deepgram);
+  const verbumActions = useStoreActions(actions => actions.verbum);
   
   const { isRecording, mediaStream, error, startRecording, stopRecording } = useAudioRecording();
   
@@ -28,27 +35,40 @@ export default function Home() {
 
   const handleStartRecording = useCallback(async () => {
     try {
-      await startRecording();
+      console.log('🎙️ Starting new recording session - resetting all data');
       
-      // Clear previous results
-      setDeepgramText('');
-      setVerbumText('');
+      // FIRST: Reset all store data before starting recording
+      deepgramActions.reset();
+      verbumActions.reset();
       verbumResultsRef.current = [];
       
+      // THEN: Start the recording
+      await startRecording();
+      
+      console.log('✅ Recording started with fresh state');
+      
     } catch (error) {
-      console.error('Failed to start recording:', error);
+      console.error('❌ Failed to start recording:', error);
     }
-  }, [startRecording]);
+  }, [startRecording, deepgramActions, verbumActions]);
 
   const handleStopRecording = useCallback(() => {
     stopRecording();
     
+    // Update store state to inactive
+    deepgramActions.setActive(false);
+    verbumActions.setActive(false);
+    
     if (verbumServiceRef.current) {
       verbumServiceRef.current.stopTranscription();
       const metrics = verbumServiceRef.current.calculateMetrics(verbumResultsRef.current);
-      setVerbumMetrics({ latency: metrics.latency, accuracy: metrics.accuracy });
+      verbumActions.updateMetrics(metrics);
+      verbumActions.setConnectionStatus('disconnected');
+      
+      // Clear the service reference to prevent reuse
+      verbumServiceRef.current = null;
     }
-  }, [stopRecording]);
+  }, [stopRecording, deepgramActions, verbumActions]);
 
   // Initialize services when recording starts
   useEffect(() => {
@@ -56,30 +76,37 @@ export default function Home() {
       const verbumApiKey = process.env.NEXT_PUBLIC_VERBUM_API_KEY || 'mock-verbum-key';
       
       try {        
-        // Initialize Verbum service (using Web Speech API as mock)
-        verbumServiceRef.current = new VerbumService(verbumApiKey);
-        verbumServiceRef.current.startTranscription(
-          mediaStream,
-          selectedLanguage.code,
-          (result) => {
-            verbumResultsRef.current.push(result);
-            if (result.isFinal) {
-              setVerbumText(prev => prev + ' ' + result.text);
-            } else {
-              // For interim results, show them with different styling
-              setVerbumText(prev => {
-                const finalWords = prev.split(' ').filter(w => w.trim());
-                return finalWords.join(' ') + ' ' + result.text;
-              });
+        console.log('🚀 Initializing STT services for fresh recording session');
+        
+        // Initialize Verbum service only if not already active
+        if (!verbumServiceRef.current) {
+          console.log('🔗 Creating new Verbum service connection');
+          verbumActions.setActive(true);
+          verbumActions.setConnectionStatus('connecting');
+          
+          verbumServiceRef.current = new VerbumService(verbumApiKey);
+          verbumServiceRef.current.startTranscription(
+            mediaStream,
+            selectedLanguage.code,
+            (result) => {
+              verbumResultsRef.current.push(result);
+              verbumActions.addResult(result);
+              
+              // Update connection status to connected on first result
+              verbumActions.setConnectionStatus('connected');
             }
-          }
-        );
+          );
+        }
 
-        // Mock Deepgram results for demonstration
+        // Set Deepgram as active and mock Deepgram results for demonstration
+        console.log('🎯 Starting Deepgram mock transcription');
+        deepgramActions.setActive(true);
+        
         let mockText = '';
         const interval = setInterval(() => {
           if (!isRecording) {
             clearInterval(interval);
+            deepgramActions.setActive(false);
             return;
           }
           
@@ -91,29 +118,44 @@ export default function Home() {
           if (mockText.split(' ').length < mockWords.length) {
             const nextWord = mockWords[mockText.split(' ').filter(w => w).length];
             mockText += (mockText ? ' ' : '') + nextWord;
-            setDeepgramText(mockText);
-            setDeepgramMetrics({ latency: Math.random() * 50 + 80, accuracy: Math.random() * 5 + 95 });
+            
+            // Create mock result and add to store
+            const mockResult: TranscriptionResult = {
+              text: nextWord,
+              timestamp: Date.now(),
+              confidence: Math.random() * 0.1 + 0.9, // 90-100%
+              isFinal: true
+            };
+            
+            deepgramActions.addResult(mockResult);
+            deepgramActions.updateMetrics({ 
+              latency: Math.random() * 50 + 80, 
+              accuracy: Math.random() * 5 + 95,
+              wordCount: mockText.split(' ').length
+            });
           }
         }, 1000);
 
-        return () => clearInterval(interval);
+        return () => {
+          clearInterval(interval);
+          // Cleanup will be handled by handleStopRecording
+        };
         
       } catch (error) {
         console.error('Error initializing STT services:', error);
+        verbumActions.setConnectionStatus('error');
       }
     }
+    
+    // Cleanup when recording stops
+    return () => {
+      if (!isRecording && verbumServiceRef.current) {
+        verbumServiceRef.current.stopTranscription();
+        verbumServiceRef.current = null;
+        verbumActions.setConnectionStatus('disconnected');
+      }
+    };
   }, [isRecording, mediaStream, selectedLanguage.code]);
-
-  const benchmarkData = {
-    deepgram: {
-      accuracy: deepgramMetrics.accuracy || 96.5,
-      latency: deepgramMetrics.latency || 120,
-    },
-    verbum: {
-      accuracy: verbumMetrics.accuracy || 89.2,
-      latency: verbumMetrics.latency || 180,
-    },
-  };
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -147,6 +189,19 @@ export default function Home() {
               onStartRecording={handleStartRecording}
               onStopRecording={handleStopRecording}
             />
+            {/* Manual Reset Button for Testing */}
+            <button
+              onClick={() => {
+                console.log('🧹 Manual reset triggered');
+                deepgramActions.reset();
+                verbumActions.reset();
+                verbumResultsRef.current = [];
+              }}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+              title="Clear all transcriptions and start fresh"
+            >
+              🔄 Reset
+            </button>
           </div>
 
           {/* Error Display */}
@@ -179,7 +234,7 @@ export default function Home() {
         </div>
 
         {/* Benchmarks Section */}
-        <BenchmarkVisualization data={benchmarkData} />
+        <BenchmarkVisualization useStore={true} />
       </main>
       
       <Footer />

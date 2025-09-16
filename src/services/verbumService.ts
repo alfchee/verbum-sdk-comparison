@@ -41,12 +41,19 @@ declare global {
 export class VerbumService {
   private socket: Socket | null = null;
   private isActive = false;
+  private isConnecting = false;
   private onTranscription?: (result: TranscriptionResult) => void;
   private startTime: number = 0;
   private results: TranscriptionResult[] = [];
   private apiKey: string;
   private mediaRecorder?: MediaRecorder;
   private stream?: MediaStream;
+  
+  // Properties for proper per-utterance latency tracking
+  private audioChunkTimestamps: Map<number, number> = new Map();
+  private currentUtteranceStart: number = 0;
+  private audioActivityDetected = false;
+  private chunkCounter = 0;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -58,9 +65,16 @@ export class VerbumService {
     language: string,
     onTranscription: (result: TranscriptionResult) => void
   ): Promise<void> {
+    // Prevent multiple connections
+    if (this.isActive || this.isConnecting) {
+      console.log('⚠️ Verbum service already active or connecting, skipping...');
+      return;
+    }
+
     this.onTranscription = onTranscription;
     this.startTime = Date.now();
     this.isActive = true;
+    this.isConnecting = true;
     this.results = [];
 
     try {
@@ -75,6 +89,7 @@ export class VerbumService {
 
     } catch (error) {
       console.error('Error starting Verbum transcription:', error);
+      this.isConnecting = false;
       
       // Fallback to Web Speech API if Verbum connection fails
       console.log('🔄 Falling back to Web Speech API...');
@@ -105,17 +120,20 @@ export class VerbumService {
       this.socket.on('connect', () => {
         console.log('✅ Connected to Verbum WebSocket');
         this.isActive = true;
+        this.isConnecting = false;
         resolve();
       });
 
       this.socket.on('connect_error', (error) => {
         console.error('❌ Verbum WebSocket connection error:', error);
+        this.isConnecting = false;
         reject(new Error(`Verbum connection failed: ${error.message}`));
       });
 
       this.socket.on('disconnect', (reason) => {
         console.log('🔌 Disconnected from Verbum WebSocket:', reason);
         this.isActive = false;
+        this.isConnecting = false;
       });
 
       // Listen for speech recognition results
@@ -126,6 +144,7 @@ export class VerbumService {
       // Connection timeout
       setTimeout(() => {
         if (!this.socket?.connected) {
+          this.isConnecting = false;
           reject(new Error('Verbum connection timeout'));
         }
       }, 10000);
@@ -135,6 +154,12 @@ export class VerbumService {
   private async startAudioStreaming(mediaStream: MediaStream): Promise<void> {
     try {
       this.stream = mediaStream;
+      
+      // Reset chunk counter and timestamps for new session
+      this.chunkCounter = 0;
+      this.audioChunkTimestamps.clear();
+      this.currentUtteranceStart = 0;
+      this.audioActivityDetected = false;
       
       // Configure MediaRecorder for OPUS encoding
       const options = {
@@ -148,13 +173,37 @@ export class VerbumService {
       this.mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
-
-          // Convert blob to ArrayBuffer and send to websocket
+          
+          const chunkId = this.chunkCounter++;
+          const chunkTimestamp = Date.now();
+          
+          // Store timestamp for this audio chunk
+          this.audioChunkTimestamps.set(chunkId, chunkTimestamp);
+          
+          // Convert blob to ArrayBuffer for activity detection
           event.data.arrayBuffer().then((buffer) => {
+            // Detect audio activity - for OPUS data, use size-based detection as primary method
+            const hasActivity = buffer.byteLength > 100 || this.detectAudioActivity(buffer);
+            
+            // Mark utterance start if we haven't detected activity yet and now we do
+            if (!this.audioActivityDetected && hasActivity) {
+              this.currentUtteranceStart = chunkTimestamp;
+              this.audioActivityDetected = true;
+              console.log('🗣️ Speech activity detected, starting utterance timing');
+            }
+
+            // Send to websocket if connected
             if (this.socket?.connected && this.isActive) {
               this.socket.emit('audioStream', buffer);
             }
+          }).catch((error) => {
+            console.error('❌ Error processing audio chunk:', error);
           });
+          
+          // Clean up old timestamps periodically
+          if (chunkId % 20 === 0) { // Every 20 chunks
+            this.cleanupOldTimestamps();
+          }
         }
       };
 
@@ -206,14 +255,41 @@ export class VerbumService {
 
     if (!text || !text.trim()) return;
 
+    const resultTimestamp = Date.now();
+    let calculatedLatency = 0;
+
+    // Calculate per-utterance latency
+    if (this.currentUtteranceStart > 0) {
+      // Use current utterance start time (most accurate for speech-to-text)
+      calculatedLatency = resultTimestamp - this.currentUtteranceStart;
+      console.log(`📊 Utterance latency: ${calculatedLatency}ms for "${text.substring(0, 30)}..."`);
+    } else if (this.audioChunkTimestamps.size > 0) {
+      // Fallback: use most recent audio chunk timestamp
+      const recentTimestamps = Array.from(this.audioChunkTimestamps.values())
+        .filter(timestamp => timestamp > resultTimestamp - 3000) // Last 3 seconds
+        .sort((a, b) => b - a); // Most recent first
+      
+      if (recentTimestamps.length > 0) {
+        calculatedLatency = resultTimestamp - recentTimestamps[0];
+        console.log(`📊 Chunk-based latency: ${calculatedLatency}ms`);
+      }
+    }
+
+    // Reset utterance timing for final results to prepare for next utterance
+    if (status === 'recognized') {
+      this.audioActivityDetected = false;
+      this.currentUtteranceStart = 0;
+    }
+
     const result: TranscriptionResult = {
       text: text.trim(),
-      timestamp: Date.now(),
+      timestamp: resultTimestamp,
       confidence: typeof confidence === 'number' ? confidence : 
                   confidence === 'high' ? 0.9 : 
                   confidence === 'medium' ? 0.7 : 
                   confidence === 'low' ? 0.5 : 0.8,
-      isFinal: status === 'recognized'
+      isFinal: status === 'recognized',
+      latency: Math.max(0, calculatedLatency) // Store individual utterance latency
     };
 
     this.results.push(result);
@@ -308,6 +384,7 @@ export class VerbumService {
     console.log('⏹️ Stopping Verbum transcription...');
     
     this.isActive = false;
+    this.isConnecting = false;
 
     // Send stream end signal
     if (this.socket?.connected) {
@@ -346,9 +423,17 @@ export class VerbumService {
       };
     }
 
-    // Calculate average latency
-    const latencies = finalResults.map(r => r.timestamp - this.startTime);
-    const avgLatency = latencies.reduce((sum, lat) => sum + lat, 0) / latencies.length;
+    // Calculate average latency using individual utterance latencies
+    const latencies = finalResults
+      .filter(r => r.latency !== undefined && r.latency > 0)
+      .map(r => r.latency!);
+    
+    const avgLatency = latencies.length > 0 
+      ? latencies.reduce((sum, lat) => sum + lat, 0) / latencies.length
+      : 0;
+
+    console.log(`📊 Calculated average latency: ${avgLatency}ms from ${latencies.length} utterances`);
+    console.log(`📊 Individual latencies: [${latencies.join(', ')}]ms`);
     
     // Calculate average confidence as accuracy proxy
     const confidences = finalResults
@@ -369,5 +454,59 @@ export class VerbumService {
       accuracy: Math.round(avgAccuracy * 10) / 10, // Round to 1 decimal place
       wordCount
     };
+  }
+
+  /**
+   * Detect if audio chunk has speech activity
+   * Simple volume-based detection with proper buffer handling
+   */
+  private detectAudioActivity(audioData: ArrayBuffer): boolean {
+    try {
+      // Check if buffer size is valid for Int16Array (must be multiple of 2)
+      if (audioData.byteLength === 0 || audioData.byteLength % 2 !== 0) {
+        // For non-PCM data (like OPUS), use simple byte-level activity detection
+        const uint8Array = new Uint8Array(audioData);
+        const threshold = 10; // Lower threshold for encoded data
+        let activity = 0;
+        
+        for (let i = 0; i < uint8Array.length; i++) {
+          if (uint8Array[i] > threshold) {
+            activity++;
+          }
+        }
+        
+        // Consider active if more than 10% of bytes show activity
+        return (activity / uint8Array.length) > 0.1;
+      }
+      
+      // For PCM data, use RMS calculation
+      const int16Array = new Int16Array(audioData);
+      const threshold = 500;
+      let sumSquares = 0;
+      
+      for (let i = 0; i < int16Array.length; i++) {
+        sumSquares += int16Array[i] * int16Array[i];
+      }
+      
+      const rms = Math.sqrt(sumSquares / int16Array.length);
+      return rms > threshold;
+      
+    } catch (error) {
+      console.warn('⚠️ Audio activity detection failed:', error);
+      // Fallback: assume there's activity if we have data
+      return audioData.byteLength > 0;
+    }
+  }
+
+  /**
+   * Clean up old audio chunk timestamps (older than 10 seconds)
+   */
+  private cleanupOldTimestamps(): void {
+    const cutoffTime = Date.now() - 10000; // 10 seconds ago
+    for (const [chunkId, timestamp] of this.audioChunkTimestamps.entries()) {
+      if (timestamp < cutoffTime) {
+        this.audioChunkTimestamps.delete(chunkId);
+      }
+    }
   }
 }

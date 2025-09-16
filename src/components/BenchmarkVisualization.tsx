@@ -1,5 +1,7 @@
 'use client';
 
+import { useStoreState } from '@/store/hooks';
+
 interface BenchmarkData {
   deepgram: {
     accuracy: number;
@@ -12,12 +14,31 @@ interface BenchmarkData {
 }
 
 interface BenchmarkVisualizationProps {
-  data: BenchmarkData;
+  data?: BenchmarkData;
+  useStore?: boolean;
 }
 
-export function BenchmarkVisualization({ data }: BenchmarkVisualizationProps) {
-  const maxAccuracy = Math.max(data.deepgram.accuracy, data.verbum.accuracy);
-  const maxLatency = Math.max(data.deepgram.latency, data.verbum.latency);
+export function BenchmarkVisualization({ data, useStore = false }: BenchmarkVisualizationProps) {
+  // Optionally read from store
+  const storeDeepgramMetrics = useStoreState(state => state.deepgram.metrics);
+  const storeVerbumMetrics = useStoreState(state => state.verbum.metrics);
+  
+  // Use store data if useStore is true, otherwise use props
+  const benchmarkData = useStore ? {
+    deepgram: {
+      accuracy: storeDeepgramMetrics.accuracy || 94.2,
+      latency: storeDeepgramMetrics.latency || 180,
+    },
+    verbum: {
+      accuracy: storeVerbumMetrics.accuracy || 97.8,
+      latency: storeVerbumMetrics.latency || 95,
+    },
+  } : (data || {
+    deepgram: { accuracy: 94.2, latency: 180 },
+    verbum: { accuracy: 97.8, latency: 95 },
+  });
+  const maxAccuracy = Math.max(benchmarkData.deepgram.accuracy, benchmarkData.verbum.accuracy);
+  const maxLatency = Math.max(benchmarkData.deepgram.latency, benchmarkData.verbum.latency);
 
   return (
     <div className="mb-20">
@@ -30,19 +51,19 @@ export function BenchmarkVisualization({ data }: BenchmarkVisualizationProps) {
             <div className="relative w-24">
               <div 
                 className="bg-blue-600 w-full rounded-t-lg transition-all duration-1000"
-                style={{ height: `${(data.deepgram.accuracy / maxAccuracy) * 100}%` }}
+                style={{ height: `${(benchmarkData.deepgram.accuracy / maxAccuracy) * 100}%` }}
               ></div>
               <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-gray-400 text-sm text-center">
-                Deepgram<br />({data.deepgram.accuracy.toFixed(1)}%)
+                Deepgram<br />({benchmarkData.deepgram.accuracy.toFixed(1)}%)
               </span>
             </div>
             <div className="relative w-24">
               <div 
                 className="bg-purple-600 w-full rounded-t-lg transition-all duration-1000"
-                style={{ height: `${(data.verbum.accuracy / maxAccuracy) * 100}%` }}
+                style={{ height: `${(benchmarkData.verbum.accuracy / maxAccuracy) * 100}%` }}
               ></div>
               <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-gray-400 text-sm text-center">
-                Verbum<br />({data.verbum.accuracy.toFixed(1)}%)
+                Verbum<br />({benchmarkData.verbum.accuracy.toFixed(1)}%)
               </span>
             </div>
           </div>
@@ -55,19 +76,19 @@ export function BenchmarkVisualization({ data }: BenchmarkVisualizationProps) {
             <div className="relative w-24">
               <div 
                 className="bg-blue-600 w-full rounded-t-lg transition-all duration-1000"
-                style={{ height: `${(data.deepgram.latency / maxLatency) * 100}%` }}
+                style={{ height: `${(benchmarkData.deepgram.latency / maxLatency) * 100}%` }}
               ></div>
               <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-gray-400 text-sm text-center">
-                Deepgram<br />({data.deepgram.latency}ms)
+                Deepgram<br />({benchmarkData.deepgram.latency}ms)
               </span>
             </div>
             <div className="relative w-24">
               <div 
                 className="bg-purple-600 w-full rounded-t-lg transition-all duration-1000"
-                style={{ height: `${(data.verbum.latency / maxLatency) * 100}%` }}
+                style={{ height: `${(benchmarkData.verbum.latency / maxLatency) * 100}%` }}
               ></div>
               <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 text-gray-400 text-sm text-center">
-                Verbum<br />({data.verbum.latency}ms)
+                Verbum<br />({benchmarkData.verbum.latency}ms)
               </span>
             </div>
           </div>
