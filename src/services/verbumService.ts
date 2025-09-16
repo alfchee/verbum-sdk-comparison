@@ -52,11 +52,16 @@ export class VerbumService {
   private mediaRecorder?: MediaRecorder;
   private stream?: MediaStream;
   
-  // Properties for proper per-utterance latency tracking
+  // Properties for consistent latency measurement using Deepgram's methodology
   private audioChunkTimestamps: Map<number, number> = new Map();
   private currentUtteranceStart: number = 0;
   private audioActivityDetected = false;
   private chunkCounter = 0;
+  
+  // Audio cursor tracking (cumulative seconds of audio sent) - matching Deepgram's approach
+  private audioCursor: number = 0; // Total seconds of audio submitted
+  private sessionStartTime: number = 0; // Session start timestamp
+  private audioStreamStartTime: number = 0; // When audio streaming began
 
   constructor(apiKey: string, store: Store<StoreModel>) {
     this.apiKey = apiKey;
@@ -185,6 +190,11 @@ export class VerbumService {
       this.currentUtteranceStart = 0;
       this.audioActivityDetected = false;
       
+      // Reset audio cursor tracking for new session
+      this.audioCursor = 0;
+      this.sessionStartTime = Date.now();
+      this.audioStreamStartTime = Date.now();
+      
       // Configure MediaRecorder for OPUS encoding
       const options = {
         mimeType: 'audio/webm;codecs=opus',
@@ -219,13 +229,19 @@ export class VerbumService {
             // Send to websocket if connected
             if (this.socket?.connected && this.isActive) {
               this.socket.emit('audioStream', buffer);
+              
+              // Update audio cursor: track duration based on MediaRecorder timeslice
+              // MediaRecorder is configured to create chunks every 20ms
+              const chunkDurationSeconds = 0.02; // 20ms chunk duration
+              this.audioCursor += chunkDurationSeconds;
             }
           }).catch((error) => {
             console.error('❌ Error processing audio chunk:', error);
           });
           
           // Clean up old timestamps periodically
-          if (chunkId % 20 === 0) { // Every 20 chunks
+          if (chunkId % 20 === 0) { // Every 20 chunks (~2 seconds)
+            console.log(`📊 Audio Cursor: ${this.audioCursor.toFixed(3)}s (${chunkId} chunks sent)`);
             this.cleanupOldTimestamps();
           }
         }
@@ -274,6 +290,7 @@ export class VerbumService {
       status,
       language,
       duration,
+      offset,
       words
     } = data;
 
@@ -282,20 +299,37 @@ export class VerbumService {
     const resultTimestamp = Date.now();
     let calculatedLatency = 0;
 
-    // Calculate per-utterance latency
-    if (this.currentUtteranceStart > 0) {
-      // Use current utterance start time (most accurate for speech-to-text)
-      calculatedLatency = resultTimestamp - this.currentUtteranceStart;
-      console.log(`📊 Utterance latency: ${calculatedLatency}ms for "${text.substring(0, 30)}..."`);
-    } else if (this.audioChunkTimestamps.size > 0) {
-      // Fallback: use most recent audio chunk timestamp
-      const recentTimestamps = Array.from(this.audioChunkTimestamps.values())
-        .filter(timestamp => timestamp > resultTimestamp - 3000) // Last 3 seconds
-        .sort((a, b) => b - a); // Most recent first
+    // Use Deepgram's official latency methodology: Audio Cursor (X) - Transcript Cursor (Y)
+    // Apply to interim results (status !== 'recognized') to match Deepgram's approach
+    if (status !== 'recognized' && offset !== undefined && duration !== undefined) {
+      // Audio Cursor (X): Total seconds of audio submitted so far
+      const audioCursorX = this.audioCursor;
       
-      if (recentTimestamps.length > 0) {
-        calculatedLatency = resultTimestamp - recentTimestamps[0];
-        console.log(`📊 Chunk-based latency: ${calculatedLatency}ms`);
+      // Transcript Cursor (Y): offset + duration from the transcript result
+      // Note: Verbum uses 'offset' similar to Deepgram's 'start'
+      const transcriptCursorY = offset + duration;
+      
+      // Latency = X - Y (convert to milliseconds)
+      calculatedLatency = Math.max(0, (audioCursorX - transcriptCursorY) * 1000);
+      
+      console.log(`📊 Verbum official latency: ${calculatedLatency.toFixed(1)}ms (Audio: ${audioCursorX.toFixed(3)}s - Transcript: ${transcriptCursorY.toFixed(3)}s) for "${text.substring(0, 30)}..."`);
+    } else if (status === 'recognized') {
+      // For final results, use fallback method or previous calculation
+      if (this.currentUtteranceStart > 0) {
+        calculatedLatency = resultTimestamp - this.currentUtteranceStart;
+        console.log(`📊 Verbum fallback latency (final): ${calculatedLatency}ms`);
+      }
+    } else {
+      // Fallback for cases without proper timing data
+      if (this.audioChunkTimestamps.size > 0) {
+        const recentTimestamps = Array.from(this.audioChunkTimestamps.values())
+          .filter(timestamp => timestamp > resultTimestamp - 3000)
+          .sort((a, b) => b - a);
+        
+        if (recentTimestamps.length > 0) {
+          calculatedLatency = resultTimestamp - recentTimestamps[0];
+          console.log(`📊 Verbum chunk-based latency: ${calculatedLatency}ms`);
+        }
       }
     }
 

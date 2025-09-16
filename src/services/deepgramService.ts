@@ -45,11 +45,16 @@ export class DeepgramService {
   private isActive: boolean = false;
   private connectionStartTime: number = 0;
   
-  // Audio chunk tracking for latency calculation
-  private audioChunkTimestamps = new Map<number, number>();
-  private currentUtteranceStart: number = 0;
+    // Properties for Deepgram's official latency measurement (audio cursor - transcript cursor)
   private audioActivityDetected: boolean = false;
+  private currentUtteranceStart: number = 0;
   private chunkCounter: number = 0;
+  private audioChunkTimestamps: Map<number, number> = new Map();
+  
+  // Audio cursor tracking (cumulative seconds of audio sent)
+  private audioCursor: number = 0; // Total seconds of audio submitted
+  private sessionStartTime: number = 0; // Session start timestamp
+  private audioStreamStartTime: number = 0; // When audio streaming began
 
   constructor(apiKey: string, store: Store<StoreModel>) {
     try {
@@ -152,23 +157,27 @@ export class DeepgramService {
     const resultTimestamp = Date.now();
     let calculatedLatency = 0;
 
-    // Calculate per-utterance latency similar to VerbumService
-    if (this.currentUtteranceStart > 0) {
-      calculatedLatency = resultTimestamp - this.currentUtteranceStart;
-      console.log(`📊 Deepgram utterance latency: ${calculatedLatency}ms for "${transcript.transcript.substring(0, 30)}..."`);
-    } else if (this.audioChunkTimestamps.size > 0) {
-      const recentTimestamps = Array.from(this.audioChunkTimestamps.values())
-        .filter(timestamp => timestamp > resultTimestamp - 3000)
-        .sort((a, b) => b - a);
+    // Use Deepgram's official latency methodology: Audio Cursor (X) - Transcript Cursor (Y)
+    // Only calculate for interim results as recommended by Deepgram
+    if (!data.is_final && transcript.start !== undefined && transcript.duration !== undefined) {
+      // Audio Cursor (X): Total seconds of audio submitted so far
+      const audioCursorX = this.audioCursor;
       
-      if (recentTimestamps.length > 0) {
-        calculatedLatency = resultTimestamp - recentTimestamps[0];
-        console.log(`📊 Deepgram chunk-based latency: ${calculatedLatency}ms`);
+      // Transcript Cursor (Y): start + duration from the transcript result
+      const transcriptCursorY = transcript.start + transcript.duration;
+      
+      // Latency = X - Y (convert to milliseconds)
+      calculatedLatency = Math.max(0, (audioCursorX - transcriptCursorY) * 1000);
+      
+      console.log(`📊 Deepgram official latency: ${calculatedLatency.toFixed(1)}ms (Audio: ${audioCursorX.toFixed(3)}s - Transcript: ${transcriptCursorY.toFixed(3)}s) for "${transcript.transcript.substring(0, 30)}..."`);
+    } else if (data.is_final) {
+      // For final results, use fallback method or previous calculation
+      if (this.currentUtteranceStart > 0) {
+        calculatedLatency = resultTimestamp - this.currentUtteranceStart;
+        console.log(`📊 Deepgram fallback latency (final): ${calculatedLatency}ms`);
       }
-    }
-
-    // Reset utterance timing for final results
-    if (data.is_final) {
+      
+      // Reset utterance timing for final results
       this.audioActivityDetected = false;
       this.currentUtteranceStart = 0;
     }
@@ -201,6 +210,11 @@ export class DeepgramService {
       this.audioChunkTimestamps.clear();
       this.currentUtteranceStart = 0;
       this.audioActivityDetected = false;
+      
+      // Reset audio cursor tracking for new session
+      this.audioCursor = 0;
+      this.sessionStartTime = Date.now();
+      this.audioStreamStartTime = Date.now();
       
       // Use AudioContext for more direct audio processing
       const audioContext = new AudioContext({ sampleRate: 16000 });
@@ -235,8 +249,14 @@ export class DeepgramService {
         const pcmData = this.convertFloat32ToPCM16(inputBuffer);
         this.connection.send(pcmData);
         
-        // Clean up old timestamps periodically
+        // Update audio cursor: add duration of this audio chunk
+        // AudioContext uses 1024 samples at 16kHz = 1024/16000 = 0.064 seconds per chunk
+        const chunkDurationSeconds = inputBuffer.length / 16000;
+        this.audioCursor += chunkDurationSeconds;
+        
+        // Debug logging every 50 chunks (~3.2 seconds)
         if (chunkId % 50 === 0) {
+          console.log(`📊 Audio Cursor: ${this.audioCursor.toFixed(3)}s (${chunkId} chunks sent)`);
           this.cleanupOldTimestamps();
         }
       };
