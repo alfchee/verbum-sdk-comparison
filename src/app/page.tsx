@@ -11,7 +11,9 @@ import { TranscriptionCard } from '@/components/TranscriptionCard';
 import { BenchmarkVisualization } from '@/components/BenchmarkVisualization';
 import { useAudioRecording } from '@/hooks/useAudioRecording';
 import { VerbumService } from '@/services/verbumService';
+import { DeepgramService } from '@/services/deepgramService';
 import { useStoreState, useStoreActions } from '@/store/hooks';
+import { store } from '@/store/index';
 
 const defaultLanguage: Language = SUPPORTED_LANGUAGES[0];
 
@@ -24,6 +26,9 @@ export default function Home() {
   const deepgramMetrics = useStoreState(state => state.deepgram.metrics);
   const verbumMetrics = useStoreState(state => state.verbum.metrics);
   
+  // Debug logging for metrics
+  console.log('📊 Current metrics - Deepgram:', deepgramMetrics, 'Verbum:', verbumMetrics);
+  
   // Store actions
   const deepgramActions = useStoreActions(actions => actions.deepgram);
   const verbumActions = useStoreActions(actions => actions.verbum);
@@ -31,6 +36,7 @@ export default function Home() {
   const { isRecording, mediaStream, error, startRecording, stopRecording } = useAudioRecording();
   
   const verbumServiceRef = useRef<VerbumService | null>(null);
+  const deepgramServiceRef = useRef<DeepgramService | null>(null);
   const verbumResultsRef = useRef<TranscriptionResult[]>([]);
 
   const handleStartRecording = useCallback(async () => {
@@ -52,18 +58,23 @@ export default function Home() {
     }
   }, [startRecording, deepgramActions, verbumActions]);
 
-  const handleStopRecording = useCallback(() => {
+  const handleStopRecording = useCallback(async () => {
     stopRecording();
     
     // Update store state to inactive
     deepgramActions.setActive(false);
     verbumActions.setActive(false);
     
+    // Stop Deepgram service
+    if (deepgramServiceRef.current) {
+      await deepgramServiceRef.current.stopTranscription();
+      deepgramServiceRef.current = null;
+    }
+    
+    // Stop Verbum service
     if (verbumServiceRef.current) {
       verbumServiceRef.current.stopTranscription();
-      const metrics = verbumServiceRef.current.calculateMetrics(verbumResultsRef.current);
-      verbumActions.updateMetrics(metrics);
-      verbumActions.setConnectionStatus('disconnected');
+      // Don't override metrics here - VerbumService already calculates them internally
       
       // Clear the service reference to prevent reuse
       verbumServiceRef.current = null;
@@ -74,9 +85,20 @@ export default function Home() {
   useEffect(() => {
     if (isRecording && mediaStream) {
       const verbumApiKey = process.env.NEXT_PUBLIC_VERBUM_API_KEY || 'mock-verbum-key';
+      const deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY || 'mock-deepgram-key';
       
       try {        
-        console.log('🚀 Initializing STT services for fresh recording session');
+        console.log('🚀 Initializing real STT services for fresh recording session');
+        
+        // Initialize Deepgram service
+        if (!deepgramServiceRef.current) {
+          console.log('🔗 Creating new Deepgram service connection');
+          deepgramActions.setActive(true);
+          deepgramActions.setConnectionStatus('connecting');
+          
+          deepgramServiceRef.current = new DeepgramService(deepgramApiKey, store);
+          deepgramServiceRef.current.startTranscription(mediaStream, selectedLanguage.code);
+        }
         
         // Initialize Verbum service only if not already active
         if (!verbumServiceRef.current) {
@@ -84,78 +106,34 @@ export default function Home() {
           verbumActions.setActive(true);
           verbumActions.setConnectionStatus('connecting');
           
-          verbumServiceRef.current = new VerbumService(verbumApiKey);
-          verbumServiceRef.current.startTranscription(
-            mediaStream,
-            selectedLanguage.code,
-            (result) => {
-              verbumResultsRef.current.push(result);
-              verbumActions.addResult(result);
-              
-              // Update connection status to connected on first result
-              verbumActions.setConnectionStatus('connected');
-            }
-          );
+          verbumServiceRef.current = new VerbumService(verbumApiKey, store);
+          verbumServiceRef.current.startTranscription(mediaStream, selectedLanguage.code);
         }
-
-        // Set Deepgram as active and mock Deepgram results for demonstration
-        console.log('🎯 Starting Deepgram mock transcription');
-        deepgramActions.setActive(true);
-        
-        let mockText = '';
-        const interval = setInterval(() => {
-          if (!isRecording) {
-            clearInterval(interval);
-            deepgramActions.setActive(false);
-            return;
-          }
-          
-          const mockWords = [
-            'Hello', 'world', 'this', 'is', 'a', 'demonstration', 'of', 'Deepgram', 
-            'speech', 'to', 'text', 'transcription', 'in', 'real', 'time'
-          ];
-          
-          if (mockText.split(' ').length < mockWords.length) {
-            const nextWord = mockWords[mockText.split(' ').filter(w => w).length];
-            mockText += (mockText ? ' ' : '') + nextWord;
-            
-            // Create mock result and add to store
-            const mockResult: TranscriptionResult = {
-              text: nextWord,
-              timestamp: Date.now(),
-              confidence: Math.random() * 0.1 + 0.9, // 90-100%
-              isFinal: true
-            };
-            
-            deepgramActions.addResult(mockResult);
-            deepgramActions.updateMetrics({ 
-              latency: Math.random() * 50 + 80, 
-              accuracy: Math.random() * 5 + 95,
-              wordCount: mockText.split(' ').length
-            });
-          }
-        }, 1000);
-
-        return () => {
-          clearInterval(interval);
-          // Cleanup will be handled by handleStopRecording
-        };
         
       } catch (error) {
         console.error('Error initializing STT services:', error);
+        deepgramActions.setConnectionStatus('error');
         verbumActions.setConnectionStatus('error');
       }
     }
     
     // Cleanup when recording stops
     return () => {
-      if (!isRecording && verbumServiceRef.current) {
-        verbumServiceRef.current.stopTranscription();
-        verbumServiceRef.current = null;
-        verbumActions.setConnectionStatus('disconnected');
+      if (!isRecording) {
+        if (deepgramServiceRef.current) {
+          deepgramServiceRef.current.stopTranscription();
+          deepgramServiceRef.current = null;
+          deepgramActions.setConnectionStatus('disconnected');
+        }
+        
+        if (verbumServiceRef.current) {
+          verbumServiceRef.current.stopTranscription();
+          verbumServiceRef.current = null;
+          verbumActions.setConnectionStatus('disconnected');
+        }
       }
     };
-  }, [isRecording, mediaStream, selectedLanguage.code]);
+  }, [isRecording, mediaStream, selectedLanguage.code, deepgramActions, verbumActions]);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -218,8 +196,8 @@ export default function Home() {
               text={deepgramText}
               isDeepgram={true}
               isRecording={isRecording}
-              latency={deepgramMetrics.latency || undefined}
-              accuracy={deepgramMetrics.accuracy || undefined}
+              latency={deepgramMetrics.latency !== 0 ? deepgramMetrics.latency : undefined}
+              accuracy={deepgramMetrics.accuracy !== 0 ? deepgramMetrics.accuracy : undefined}
             />
             
             <TranscriptionCard
@@ -227,8 +205,8 @@ export default function Home() {
               text={verbumText}
               isDeepgram={false}
               isRecording={isRecording}
-              latency={verbumMetrics.latency || undefined}
-              accuracy={verbumMetrics.accuracy || undefined}
+              latency={verbumMetrics.latency !== 0 ? verbumMetrics.latency : undefined}
+              accuracy={verbumMetrics.accuracy !== 0 ? verbumMetrics.accuracy : undefined}
             />
           </div>
         </div>

@@ -8,17 +8,20 @@ export interface DeepgramModel {
   results: TranscriptionResult[];
   metrics: TranscriptionMetrics;
   isActive: boolean;
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   
   // Computed
   finalText: Computed<DeepgramModel, string>;
   averageLatency: Computed<DeepgramModel, number>;
   totalWords: Computed<DeepgramModel, number>;
+  isConnected: Computed<DeepgramModel, boolean>;
   
   // Actions
   addResult: Action<DeepgramModel, TranscriptionResult>;
   updateText: Action<DeepgramModel, string>;
   updateMetrics: Action<DeepgramModel, TranscriptionMetrics>;
   setActive: Action<DeepgramModel, boolean>;
+  setConnectionStatus: Action<DeepgramModel, 'disconnected' | 'connecting' | 'connected' | 'error'>;
   clearResults: Action<DeepgramModel>;
   reset: Action<DeepgramModel>;
 }

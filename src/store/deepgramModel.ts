@@ -11,8 +11,12 @@ export const deepgramModel: DeepgramModel = {
     wordCount: 0,
   },
   isActive: false,
+  connectionStatus: 'disconnected',
 
   // Computed Values
+  isConnected: computed((state) => {
+    return state.connectionStatus === 'connected';
+  }),
   finalText: computed((state) => {
     return state.results
       .filter(result => result.isFinal)
@@ -65,6 +69,10 @@ export const deepgramModel: DeepgramModel = {
     state.isActive = payload;
   }),
 
+  setConnectionStatus: action((state, payload) => {
+    state.connectionStatus = payload;
+  }),
+
   clearResults: action((state) => {
     console.log('🧹 Clearing Deepgram results and text');
     state.results = [];
@@ -81,5 +89,6 @@ export const deepgramModel: DeepgramModel = {
       wordCount: 0,
     };
     state.isActive = false;
+    state.connectionStatus = 'disconnected';
   }),
 };

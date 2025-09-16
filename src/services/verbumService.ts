@@ -3,6 +3,8 @@
 import { io, Socket } from 'socket.io-client';
 import { TranscriptionResult, TranscriptionMetrics } from '@/types';
 import { mapLanguageCode } from '@/utils';
+import { Store } from 'easy-peasy';
+import { StoreModel } from '@/store/types';
 
 interface VerbumSpeechResult {
   id?: string;
@@ -40,6 +42,7 @@ declare global {
 
 export class VerbumService {
   private socket: Socket | null = null;
+  private store: Store<StoreModel>;
   private isActive = false;
   private isConnecting = false;
   private onTranscription?: (result: TranscriptionResult) => void;
@@ -55,15 +58,16 @@ export class VerbumService {
   private audioActivityDetected = false;
   private chunkCounter = 0;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, store: Store<StoreModel>) {
     this.apiKey = apiKey;
+    this.store = store;
     console.log('Verbum service initialized');
   }
 
   async startTranscription(
     mediaStream: MediaStream,
     language: string,
-    onTranscription: (result: TranscriptionResult) => void
+    onTranscription?: (result: TranscriptionResult) => void
   ): Promise<void> {
     // Prevent multiple connections
     if (this.isActive || this.isConnecting) {
@@ -71,11 +75,18 @@ export class VerbumService {
       return;
     }
 
-    this.onTranscription = onTranscription;
+    // Set callback - use store if no callback provided
+    this.onTranscription = onTranscription || ((result) => {
+      this.store.getActions().verbum.addResult(result);
+    });
     this.startTime = Date.now();
     this.isActive = true;
     this.isConnecting = true;
     this.results = [];
+
+    // Update store state
+    this.store.getActions().verbum.setActive(true);
+    this.store.getActions().verbum.setConnectionStatus('connecting');
 
     try {
       // Map language code to Verbum format
@@ -90,10 +101,18 @@ export class VerbumService {
     } catch (error) {
       console.error('Error starting Verbum transcription:', error);
       this.isConnecting = false;
+      this.store.getActions().verbum.setConnectionStatus('error');
       
       // Fallback to Web Speech API if Verbum connection fails
       console.log('🔄 Falling back to Web Speech API...');
-      await this.fallbackToWebSpeech(mediaStream, language, onTranscription);
+      if (onTranscription) {
+        await this.fallbackToWebSpeech(mediaStream, language, onTranscription);
+      } else {
+        // Use store for callback
+        await this.fallbackToWebSpeech(mediaStream, language, (result) => {
+          this.store.getActions().verbum.addResult(result);
+        });
+      }
     }
   }
 
@@ -121,12 +140,15 @@ export class VerbumService {
         console.log('✅ Connected to Verbum WebSocket');
         this.isActive = true;
         this.isConnecting = false;
+        this.store.getActions().verbum.setConnectionStatus('connected');
+        this.store.getActions().verbum.setActive(true);
         resolve();
       });
 
       this.socket.on('connect_error', (error) => {
         console.error('❌ Verbum WebSocket connection error:', error);
         this.isConnecting = false;
+        this.store.getActions().verbum.setConnectionStatus('error');
         reject(new Error(`Verbum connection failed: ${error.message}`));
       });
 
@@ -134,6 +156,8 @@ export class VerbumService {
         console.log('🔌 Disconnected from Verbum WebSocket:', reason);
         this.isActive = false;
         this.isConnecting = false;
+        this.store.getActions().verbum.setConnectionStatus('disconnected');
+        this.store.getActions().verbum.setActive(false);
       });
 
       // Listen for speech recognition results
@@ -295,18 +319,21 @@ export class VerbumService {
     this.results.push(result);
 
     // Call the transcription callback
-    if (this.onTranscription) {
-      this.onTranscription(result);
-    }
+    this.onTranscription!(result);
 
-    // Log detailed results for debugging
+    // Update metrics in store for final results
     if (result.isFinal) {
+      const currentResults = this.store.getState().verbum.results;
+      const metrics = this.calculateMetrics(currentResults);
+      this.store.getActions().verbum.updateMetrics(metrics);
+      
       console.log('🎯 Verbum Final Result:', {
         text: result.text,
         confidence: result.confidence,
         duration: duration,
         language: language,
-        wordsCount: words?.length || 0
+        wordsCount: words?.length || 0,
+        metrics: metrics
       });
     } else {
       console.log('🔄 Verbum Interim Result:', result.text.substring(0, 50) + '...');
@@ -408,6 +435,17 @@ export class VerbumService {
       this.socket.disconnect();
       this.socket = null;
     }
+
+    // Calculate and update final metrics
+    if (this.results.length > 0) {
+      const finalMetrics = this.calculateMetrics(this.results);
+      this.store.getActions().verbum.updateMetrics(finalMetrics);
+      console.log('📊 Final Verbum metrics:', finalMetrics);
+    }
+
+    // Update connection status
+    this.store.getActions().verbum.setConnectionStatus('disconnected');
+    this.store.getActions().verbum.setActive(false);
 
     console.log('✅ Verbum transcription stopped');
   }

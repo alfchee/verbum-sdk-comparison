@@ -26,12 +26,12 @@ export function BenchmarkVisualization({ data, useStore = false }: BenchmarkVisu
   // Use store data if useStore is true, otherwise use props
   const benchmarkData = useStore ? {
     deepgram: {
-      accuracy: storeDeepgramMetrics.accuracy || 94.2,
-      latency: storeDeepgramMetrics.latency || 180,
+      accuracy: storeDeepgramMetrics.accuracy > 0 ? storeDeepgramMetrics.accuracy : 94.2,
+      latency: storeDeepgramMetrics.latency > 0 ? storeDeepgramMetrics.latency : 180,
     },
     verbum: {
-      accuracy: storeVerbumMetrics.accuracy || 97.8,
-      latency: storeVerbumMetrics.latency || 95,
+      accuracy: storeVerbumMetrics.accuracy > 0 ? storeVerbumMetrics.accuracy : 97.8,
+      latency: storeVerbumMetrics.latency > 0 ? storeVerbumMetrics.latency : 95,
     },
   } : (data || {
     deepgram: { accuracy: 94.2, latency: 180 },
