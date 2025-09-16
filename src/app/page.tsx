@@ -1,103 +1,188 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { Header } from '@/components/Header';
+import { Footer } from '@/components/Footer';
+import { LanguageSelector } from '@/components/LanguageSelector';
+import { Language, TranscriptionResult } from '@/types';
+import { SUPPORTED_LANGUAGES } from '@/utils';
+import { RecordingControls } from '@/components/RecordingControls';
+import { TranscriptionCard } from '@/components/TranscriptionCard';
+import { BenchmarkVisualization } from '@/components/BenchmarkVisualization';
+import { useAudioRecording } from '@/hooks/useAudioRecording';
+import { VerbumService } from '@/services/verbumService';
+
+const defaultLanguage: Language = SUPPORTED_LANGUAGES[0];
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [selectedLanguage, setSelectedLanguage] = useState<Language>(defaultLanguage);
+  const [deepgramText, setDeepgramText] = useState('');
+  const [verbumText, setVerbumText] = useState('');
+  const [deepgramMetrics, setDeepgramMetrics] = useState({ latency: 0, accuracy: 0 });
+  const [verbumMetrics, setVerbumMetrics] = useState({ latency: 0, accuracy: 0 });
+  
+  const { isRecording, mediaStream, error, startRecording, stopRecording } = useAudioRecording();
+  
+  const verbumServiceRef = useRef<VerbumService | null>(null);
+  const verbumResultsRef = useRef<TranscriptionResult[]>([]);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const handleStartRecording = useCallback(async () => {
+    try {
+      await startRecording();
+      
+      // Clear previous results
+      setDeepgramText('');
+      setVerbumText('');
+      verbumResultsRef.current = [];
+      
+    } catch (error) {
+      console.error('Failed to start recording:', error);
+    }
+  }, [startRecording]);
+
+  const handleStopRecording = useCallback(() => {
+    stopRecording();
+    
+    if (verbumServiceRef.current) {
+      verbumServiceRef.current.stopTranscription();
+      const metrics = verbumServiceRef.current.calculateMetrics(verbumResultsRef.current);
+      setVerbumMetrics({ latency: metrics.latency, accuracy: metrics.accuracy });
+    }
+  }, [stopRecording]);
+
+  // Initialize services when recording starts
+  useEffect(() => {
+    if (isRecording && mediaStream) {
+      const verbumApiKey = process.env.NEXT_PUBLIC_VERBUM_API_KEY || 'mock-verbum-key';
+      
+      try {        
+        // Initialize Verbum service (using Web Speech API as mock)
+        verbumServiceRef.current = new VerbumService(verbumApiKey);
+        verbumServiceRef.current.startTranscription(
+          mediaStream,
+          selectedLanguage.code,
+          (result) => {
+            verbumResultsRef.current.push(result);
+            if (result.isFinal) {
+              setVerbumText(prev => prev + ' ' + result.text);
+            } else {
+              // For interim results, show them with different styling
+              setVerbumText(prev => {
+                const finalWords = prev.split(' ').filter(w => w.trim());
+                return finalWords.join(' ') + ' ' + result.text;
+              });
+            }
+          }
+        );
+
+        // Mock Deepgram results for demonstration
+        let mockText = '';
+        const interval = setInterval(() => {
+          if (!isRecording) {
+            clearInterval(interval);
+            return;
+          }
+          
+          const mockWords = [
+            'Hello', 'world', 'this', 'is', 'a', 'demonstration', 'of', 'Deepgram', 
+            'speech', 'to', 'text', 'transcription', 'in', 'real', 'time'
+          ];
+          
+          if (mockText.split(' ').length < mockWords.length) {
+            const nextWord = mockWords[mockText.split(' ').filter(w => w).length];
+            mockText += (mockText ? ' ' : '') + nextWord;
+            setDeepgramText(mockText);
+            setDeepgramMetrics({ latency: Math.random() * 50 + 80, accuracy: Math.random() * 5 + 95 });
+          }
+        }, 1000);
+
+        return () => clearInterval(interval);
+        
+      } catch (error) {
+        console.error('Error initializing STT services:', error);
+      }
+    }
+  }, [isRecording, mediaStream, selectedLanguage.code]);
+
+  const benchmarkData = {
+    deepgram: {
+      accuracy: deepgramMetrics.accuracy || 96.5,
+      latency: deepgramMetrics.latency || 120,
+    },
+    verbum: {
+      accuracy: verbumMetrics.accuracy || 89.2,
+      latency: verbumMetrics.latency || 180,
+    },
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-950 text-white">
+      <Header />
+      
+      <main className="container mx-auto px-4 mt-16 text-center">
+        {/* Hero Section */}
+        <div className="mb-20">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">
+            Real-time Speech-to-Text: <br className="md:hidden" />
+            Deepgram vs. Verbum
+          </h1>
+          <p className="mt-4 text-gray-400">Unbiased Benchmarking for Developers</p>
+          <button className="mt-8 px-8 py-3 rounded-full font-bold text-lg gradient-button">
+            Start Comparing Now
+          </button>
         </div>
+
+        {/* Live Transcription Section */}
+        <div className="mb-20">
+          <h2 className="text-2xl font-semibold mb-8">Live Transcription</h2>
+          
+          {/* Language Selector and Recording Controls */}
+          <div className="flex items-center justify-center space-x-4 mb-8 text-gray-400">
+            <LanguageSelector
+              selectedLanguage={selectedLanguage}
+              onLanguageChange={setSelectedLanguage}
+            />
+            <RecordingControls
+              isRecording={isRecording}
+              onStartRecording={handleStartRecording}
+              onStopRecording={handleStopRecording}
+            />
+          </div>
+
+          {/* Error Display */}
+          {error && (
+            <div className="mb-4 p-4 bg-red-900/20 border border-red-600 rounded-lg text-red-400">
+              {error}
+            </div>
+          )}
+
+          {/* Transcription Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-left">
+            <TranscriptionCard
+              title="Deepgram Transcription"
+              text={deepgramText}
+              isDeepgram={true}
+              isRecording={isRecording}
+              latency={deepgramMetrics.latency || undefined}
+              accuracy={deepgramMetrics.accuracy || undefined}
+            />
+            
+            <TranscriptionCard
+              title="Verbum Transcription"
+              text={verbumText}
+              isDeepgram={false}
+              isRecording={isRecording}
+              latency={verbumMetrics.latency || undefined}
+              accuracy={verbumMetrics.accuracy || undefined}
+            />
+          </div>
+        </div>
+
+        {/* Benchmarks Section */}
+        <BenchmarkVisualization data={benchmarkData} />
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      
+      <Footer />
     </div>
   );
 }

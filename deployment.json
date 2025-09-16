@@ -1,0 +1,26 @@
+{
+  "scripts": {
+    "build": "next build",
+    "start": "next start",
+    "dev": "next dev --turbopack",
+    "lint": "next lint",
+    "lint:fix": "next lint --fix",
+    "type-check": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.{js,ts,tsx,json,css,md}\"",
+    "format:check": "prettier --check \"src/**/*.{js,ts,tsx,json,css,md}\""
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
+  },
+  "lint-staged": {
+    "src/**/*.{js,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "src/**/*.{json,css,md}": [
+      "prettier --write"
+    ]
+  }
+}
