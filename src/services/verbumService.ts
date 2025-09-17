@@ -52,6 +52,13 @@ export class VerbumService {
   private mediaRecorder?: MediaRecorder;
   private stream?: MediaStream;
   
+  // PCM audio processing properties
+  private audioContext?: AudioContext;
+  private audioSource?: MediaStreamAudioSourceNode;
+  private scriptProcessor?: ScriptProcessorNode;
+  private audioSamples: number[] = [];
+  private sendInterval?: NodeJS.Timeout;
+  
   // Properties for consistent latency measurement using Deepgram's methodology
   private audioChunkTimestamps: Map<number, number> = new Map();
   private currentUtteranceStart: number = 0;
@@ -133,7 +140,7 @@ export class VerbumService {
         },
         query: {
           language: [language],
-          encoding: 'OPUS',
+          encoding: 'PCM',
           tags: JSON.stringify({ 
             project: 'real-time-demo' 
           }),
@@ -195,88 +202,83 @@ export class VerbumService {
       this.sessionStartTime = Date.now();
       this.audioStreamStartTime = Date.now();
       
-      // Configure MediaRecorder for OPUS encoding
-      const options = {
-        mimeType: 'audio/webm;codecs=opus',
-        audioBitsPerSecond: 25600,
+      // Clear audio samples buffer
+      this.audioSamples = [];
+      
+      // PCM audio processing configuration (matching Vue.js implementation exactly)
+      const sampleRate = 8000;        // 8kHz sample rate
+      const bitsPerSample = 16;        // 16-bit samples
+      const channelCount = 1;          // Mono (1 channel)
+      
+      // Create AudioContext with the specified sample rate
+      this.audioContext = new AudioContext({ sampleRate });
+      this.audioSource = this.audioContext.createMediaStreamSource(mediaStream);
+      this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      
+      // Process audio data (convert to PCM 16-bit)
+      this.scriptProcessor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        for (let i = 0; i < input.length; i++) {
+          // Convert floating point sample to 16-bit signed integer
+          const sample = Math.round(input[i] * 0x7fff);
+          this.audioSamples.push(sample);
+        }
       };
 
-      this.mediaRecorder = new MediaRecorder(mediaStream, options);
-      let audioChunks: Blob[] = [];
+      // Connect audio processing chain
+      this.audioSource.connect(this.scriptProcessor);
+      this.scriptProcessor.connect(this.audioContext.destination);
 
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunks.push(event.data);
+      // Calculate chunk size for PCM data
+      const chunkSize = (sampleRate * channelCount * bitsPerSample) / 8;
+      
+      // Start sending audio data to the server (every 20ms like Vue.js implementation)
+      this.sendInterval = setInterval(() => {
+        if (this.audioSamples.length >= chunkSize) {
+          const chunk = this.audioSamples.splice(0, chunkSize);
           
-          const chunkId = this.chunkCounter++;
-          const chunkTimestamp = Date.now();
+          // Encode chunk as a little-endian, 16-bit, signed integer array
+          const buffer = new ArrayBuffer(chunk.length * 2);
+          const view = new DataView(buffer);
           
-          // Store timestamp for this audio chunk
-          this.audioChunkTimestamps.set(chunkId, chunkTimestamp);
+          for (let i = 0; i < chunk.length; i++) {
+            view.setInt16(i * 2, chunk[i], true); // true = little endian
+          }
+
+          // Detect audio activity using PCM data
+          const hasActivity = this.detectAudioActivity(buffer);
           
-          // Convert blob to ArrayBuffer for activity detection
-          event.data.arrayBuffer().then((buffer) => {
-            // Detect audio activity - for OPUS data, use size-based detection as primary method
-            const hasActivity = buffer.byteLength > 100 || this.detectAudioActivity(buffer);
+          // Mark utterance start if we detect activity
+          if (!this.audioActivityDetected && hasActivity) {
+            this.currentUtteranceStart = Date.now();
+            this.audioActivityDetected = true;
+            console.log('🗣️ Speech activity detected, starting utterance timing');
+          }
+
+          // Send to Verbum WebSocket if connected
+          if (this.socket?.connected && this.isActive) {
+            this.socket.emit('audioStream', buffer);
             
-            // Mark utterance start if we haven't detected activity yet and now we do
-            if (!this.audioActivityDetected && hasActivity) {
-              this.currentUtteranceStart = chunkTimestamp;
-              this.audioActivityDetected = true;
-              console.log('🗣️ Speech activity detected, starting utterance timing');
+            // Update audio cursor: track duration based on chunk interval
+            const chunkDurationSeconds = 0.02; // 20ms chunk duration
+            this.audioCursor += chunkDurationSeconds;
+            
+            // Store timestamp for this audio chunk
+            const chunkId = this.chunkCounter++;
+            this.audioChunkTimestamps.set(chunkId, Date.now());
+            
+            // Clean up old timestamps periodically
+            if (chunkId % 50 === 0) { // Every 50 chunks (~1 second)
+              console.log(`📊 Audio Cursor: ${this.audioCursor.toFixed(3)}s (${chunkId} PCM chunks sent)`);
+              this.cleanupOldTimestamps();
             }
-
-            // Send to websocket if connected
-            if (this.socket?.connected && this.isActive) {
-              this.socket.emit('audioStream', buffer);
-              
-              // Update audio cursor: track duration based on MediaRecorder timeslice
-              // MediaRecorder is configured to create chunks every 20ms
-              const chunkDurationSeconds = 0.02; // 20ms chunk duration
-              this.audioCursor += chunkDurationSeconds;
-            }
-          }).catch((error) => {
-            console.error('❌ Error processing audio chunk:', error);
-          });
-          
-          // Clean up old timestamps periodically
-          if (chunkId % 20 === 0) { // Every 20 chunks (~2 seconds)
-            console.log(`📊 Audio Cursor: ${this.audioCursor.toFixed(3)}s (${chunkId} chunks sent)`);
-            this.cleanupOldTimestamps();
           }
         }
-      };
+      }, 20); // Send every 20ms (matching Vue.js implementation)
 
-      // Handle stopping
-      this.mediaRecorder.onstop = () => {
-        console.log('🎙️ MediaRecorder stopped');
-        if (this.stream) {
-          this.stream.getTracks().forEach((track) => track.stop());
-        }
-      };
-
-      // Handle errors
-      this.mediaRecorder.onerror = (event) => {
-        console.error('❌ MediaRecorder error:', event);
-        if (this.stream) {
-          this.stream.getTracks().forEach((track) => track.stop());
-        }
-      };
-
-      // Start recording with timeslice to get data periodically (every 20ms)
-      this.mediaRecorder.start(20);
-
-      // Clear accumulated chunks periodically to prevent memory buildup
-      const cleanupInterval = setInterval(() => {
-        if (!this.isActive) {
-          clearInterval(cleanupInterval);
-        }
-        audioChunks = [];
-      }, 1000);
-
-      console.log('🎙️ Started OPUS audio streaming to Verbum');
+      console.log('🎙️ Started PCM audio streaming to Verbum (8kHz, 16-bit, mono)');
     } catch (error) {
-      console.error('Error starting audio streaming:', error);
+      console.error('Error starting PCM audio streaming:', error);
       throw error;
     }
   }
@@ -452,7 +454,31 @@ export class VerbumService {
       this.socket.emit('streamEnd');
     }
 
-    // Clean up MediaRecorder
+    // Clean up PCM audio processing
+    if (this.sendInterval) {
+      clearInterval(this.sendInterval);
+      this.sendInterval = undefined;
+    }
+    
+    if (this.scriptProcessor) {
+      this.scriptProcessor.disconnect();
+      this.scriptProcessor = undefined;
+    }
+    
+    if (this.audioSource) {
+      this.audioSource.disconnect();
+      this.audioSource = undefined;
+    }
+    
+    if (this.audioContext && this.audioContext.state !== 'closed') {
+      this.audioContext.close();
+      this.audioContext = undefined;
+    }
+    
+    // Clear audio samples buffer
+    this.audioSamples = [];
+
+    // Clean up MediaRecorder (if used for fallback)
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
       this.mediaRecorder.stop();
       this.mediaRecorder = undefined;
