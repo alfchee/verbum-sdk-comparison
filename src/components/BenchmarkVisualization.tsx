@@ -63,8 +63,7 @@ export function BenchmarkVisualization({ data, useStore = false }: BenchmarkVisu
     deepgram: { accuracy: 0, latency: 0 },
     verbum: { accuracy: 0, latency: 0 },
   });
-  const maxAccuracy = Math.max(benchmarkData.deepgram.accuracy, benchmarkData.verbum.accuracy, 100); // Min 100% for accuracy scale
-  const maxLatency = Math.max(benchmarkData.deepgram.latency, benchmarkData.verbum.latency, 200); // Min 200ms for latency scale
+  // Remove unused variables - Chart.js handles scaling automatically
   
   // Show if we have any actual measurements
   const hasAnyData = hasDeepgramData || hasVerbumData;
@@ -170,7 +169,7 @@ export function BenchmarkVisualization({ data, useStore = false }: BenchmarkVisu
         max: 100, // Accuracy is percentage (0-100%)
         ticks: {
           ...chartOptions.scales.y.ticks,
-          callback: function(value: any) {
+          callback: function(value: string | number) {
             return value + '%';
           },
         },
@@ -187,7 +186,7 @@ export function BenchmarkVisualization({ data, useStore = false }: BenchmarkVisu
         ...chartOptions.scales.y,
         ticks: {
           ...chartOptions.scales.y.ticks,
-          callback: function(value: any) {
+          callback: function(value: string | number) {
             return value + 'ms';
           },
         },

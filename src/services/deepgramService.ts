@@ -140,9 +140,10 @@ export class DeepgramService {
       this.store.getActions().deepgram.setActive(false);
     });
 
-    this.connection.addListener(LiveTranscriptionEvents.Warning, (warning: any) => {
-      console.warn('⚠️ Deepgram warning:', warning);
-    });
+    // Note: Warning event might not be available in all SDK versions
+    // this.connection.addListener(LiveTranscriptionEvents.Warning, (warning: any) => {
+    //   console.warn('⚠️ Deepgram warning:', warning);
+    // });
 
     this.connection.addListener(LiveTranscriptionEvents.Metadata, (metadata: any) => {
       console.log('📊 Deepgram metadata:', metadata);
