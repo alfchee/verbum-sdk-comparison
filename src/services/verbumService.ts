@@ -14,6 +14,10 @@ interface VerbumSpeechResult {
   language?: string;
   duration?: number;
   offset?: number;
+  translations?: Array<Array<{
+    text: string;
+    to: string;
+  }>>;
   words?: Array<{
     word: string;
     start?: number;
@@ -79,7 +83,8 @@ export class VerbumService {
   async startTranscription(
     mediaStream: MediaStream,
     language: string,
-    onTranscription?: (result: TranscriptionResult) => void
+    onTranscription?: (result: TranscriptionResult) => void,
+    translateTo?: string
   ): Promise<void> {
     // Prevent multiple connections
     if (this.isActive || this.isConnecting) {
@@ -102,10 +107,18 @@ export class VerbumService {
 
     try {
       // Map language code to Verbum format
-      const verbumLanguage = mapLanguageCode(language, 'verbum');
-      
+      const verbumLanguage = mapLanguageCode(language, 'verbum', 'language');
+      const verbumTranslateTo = translateTo ? mapLanguageCode(translateTo, 'verbum', 'translateTo') : undefined;
+
+      console.log('🔍 Verbum language mapping:', {
+        inputLanguage: language,
+        mappedLanguage: verbumLanguage,
+        inputTranslateTo: translateTo,
+        mappedTranslateTo: verbumTranslateTo
+      });
+
       // Connect to Verbum WebSocket
-      await this.connectToVerbum(verbumLanguage);
+      await this.connectToVerbum(verbumLanguage, verbumTranslateTo);
       
       // Start audio processing and streaming
       await this.startAudioStreaming(mediaStream);
@@ -118,17 +131,17 @@ export class VerbumService {
       // Fallback to Web Speech API if Verbum connection fails
       console.log('🔄 Falling back to Web Speech API...');
       if (onTranscription) {
-        await this.fallbackToWebSpeech(mediaStream, language, onTranscription);
+        await this.fallbackToWebSpeech(mediaStream, language, onTranscription, translateTo);
       } else {
         // Use store for callback
         await this.fallbackToWebSpeech(mediaStream, language, (result) => {
           this.store.getActions().verbum.addResult(result);
-        });
+        }, translateTo);
       }
     }
   }
 
-  private async connectToVerbum(language: string): Promise<void> {
+  private async connectToVerbum(language: string, translateTo?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       console.log('🔌 Connecting to Verbum WebSocket...');
 
@@ -141,11 +154,35 @@ export class VerbumService {
         query: {
           language: [language],
           encoding: 'PCM',
-          tags: JSON.stringify({ 
-            project: 'real-time-demo' 
+          tags: JSON.stringify({
+            project: 'real-time-demo'
           }),
+          ...(translateTo && { translateTo: [translateTo] }),
         },
         upgrade: true,
+      });
+
+      // Debug log for Verbum connection parameters
+      console.log('🔍 Verbum connection query:', {
+        language: [language],
+        translateTo: translateTo ? [translateTo] : undefined,
+        fullQuery: {
+          language: [language],
+          encoding: 'PCM',
+          tags: JSON.stringify({
+            project: 'real-time-demo'
+          }),
+          ...(translateTo && { translateTo: [translateTo] }),
+        }
+      });
+
+      // Log the actual values being sent to validate against error message
+      console.log('🚨 VERBUM VALIDATION CHECK:', {
+        languageValue: language,
+        translateToValue: translateTo,
+        expectedLanguageFormat: 'Full codes like es-ES',
+        expectedTranslateToFormat: 'Simplified codes like en',
+        fixApplied: 'Language now uses full codes, translateTo uses simplified codes'
       });
 
       this.socket.on('connect', () => {
@@ -293,6 +330,7 @@ export class VerbumService {
       language,
       duration,
       offset,
+      translations,
       words
     } = data;
 
@@ -344,12 +382,13 @@ export class VerbumService {
     const result: TranscriptionResult = {
       text: text.trim(),
       timestamp: resultTimestamp,
-      confidence: typeof confidence === 'number' ? confidence : 
-                  confidence === 'high' ? 0.9 : 
-                  confidence === 'medium' ? 0.7 : 
-                  confidence === 'low' ? 0.5 : 0.8,
+      confidence: typeof confidence === 'number' ? confidence :
+                 confidence === 'high' ? 0.9 :
+                 confidence === 'medium' ? 0.7 :
+                 confidence === 'low' ? 0.5 : 0.8,
       isFinal: status === 'recognized',
-      latency: Math.max(0, calculatedLatency) // Store individual utterance latency
+      latency: Math.max(0, calculatedLatency), // Store individual utterance latency
+      translation: translations?.[0]?.[0]?.text?.trim()
     };
 
     this.results.push(result);
@@ -357,14 +396,20 @@ export class VerbumService {
     // Call the transcription callback
     this.onTranscription!(result);
 
+    // Handle translation if present
+    if (result.translation) {
+      this.store.getActions().verbum.addTranslationResult(result);
+    }
+
     // Update metrics in store for final results
     if (result.isFinal) {
       const currentResults = this.store.getState().verbum.results;
       const metrics = this.calculateMetrics(currentResults);
       this.store.getActions().verbum.updateMetrics(metrics);
-      
+
       console.log('🎯 Verbum Final Result:', {
         text: result.text,
+        translation: result.translation,
         confidence: result.confidence,
         duration: duration,
         language: language,
@@ -380,7 +425,8 @@ export class VerbumService {
   private async fallbackToWebSpeech(
     mediaStream: MediaStream,
     language: string,
-    onTranscription: (result: TranscriptionResult) => void
+    onTranscription: (result: TranscriptionResult) => void,
+    translateTo?: string
   ): Promise<void> {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     

@@ -31,6 +31,8 @@ export interface VerbumModel {
   // State
   text: string;
   results: TranscriptionResult[];
+  translationText: string;
+  translationResults: TranscriptionResult[];
   metrics: TranscriptionMetrics;
   isActive: boolean;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -39,10 +41,12 @@ export interface VerbumModel {
   finalText: Computed<VerbumModel, string>;
   averageLatency: Computed<VerbumModel, number>;
   totalWords: Computed<VerbumModel, number>;
+  finalTranslationText: Computed<VerbumModel, string>;
   isConnected: Computed<VerbumModel, boolean>;
   
   // Actions
   addResult: Action<VerbumModel, TranscriptionResult>;
+  addTranslationResult: Action<VerbumModel, TranscriptionResult>;
   updateText: Action<VerbumModel, string>;
   updateMetrics: Action<VerbumModel, TranscriptionMetrics>;
   setActive: Action<VerbumModel, boolean>;

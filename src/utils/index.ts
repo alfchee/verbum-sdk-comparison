@@ -18,19 +18,59 @@ export const SUPPORTED_LANGUAGES: Language[] = [
 /**
  * Maps language codes between different STT services
  */
-export const mapLanguageCode = (code: string, service: 'deepgram' | 'verbum' | 'webspeech'): string => {
+export const mapLanguageCode = (
+  code: string,
+  service: 'deepgram' | 'verbum' | 'webspeech',
+  type: 'language' | 'translateTo' = 'language'
+): string => {
   const mapping: { [key: string]: { [key: string]: string } } = {
-    'en-US': { deepgram: 'en-US', verbum: 'en-US', webspeech: 'en-US' },
-    'es-ES': { deepgram: 'es', verbum: 'es-ES', webspeech: 'es-ES' },
-    'de-DE': { deepgram: 'de', verbum: 'de-DE', webspeech: 'de-DE' },
-    'it-IT': { deepgram: 'it', verbum: 'it-IT', webspeech: 'it-IT' },
-    'fr-FR': { deepgram: 'fr', verbum: 'fr-FR', webspeech: 'fr-FR' },
-    'zh-CN': { deepgram: 'zh', verbum: 'zh-CN', webspeech: 'zh-CN' },
-    'ja-JP': { deepgram: 'ja', verbum: 'ja-JP', webspeech: 'ja-JP' },
-    'ko-KR': { deepgram: 'ko', verbum: 'ko-KR', webspeech: 'ko-KR' },
-    'ru-RU': { deepgram: 'ru', verbum: 'ru-RU', webspeech: 'ru-RU' },
+    'en-US': {
+      deepgram: 'en-US',
+      verbum: type === 'language' ? 'en-US' : 'en', // Full for language, simplified for translateTo
+      webspeech: 'en-US'
+    },
+    'es-ES': {
+      deepgram: 'es',
+      verbum: type === 'language' ? 'es-ES' : 'es', // Full for language, simplified for translateTo
+      webspeech: 'es-ES'
+    },
+    'de-DE': {
+      deepgram: 'de',
+      verbum: type === 'language' ? 'de-DE' : 'de', // Full for language, simplified for translateTo
+      webspeech: 'de-DE'
+    },
+    'it-IT': {
+      deepgram: 'it',
+      verbum: type === 'language' ? 'it-IT' : 'it', // Full for language, simplified for translateTo
+      webspeech: 'it-IT'
+    },
+    'fr-FR': {
+      deepgram: 'fr',
+      verbum: type === 'language' ? 'fr-FR' : 'fr', // Full for language, simplified for translateTo
+      webspeech: 'fr-FR'
+    },
+    'zh-CN': {
+      deepgram: 'zh',
+      verbum: type === 'language' ? 'zh-CN' : 'zh', // Full for language, simplified for translateTo
+      webspeech: 'zh-CN'
+    },
+    'ja-JP': {
+      deepgram: 'ja',
+      verbum: type === 'language' ? 'ja-JP' : 'ja', // Full for language, simplified for translateTo
+      webspeech: 'ja-JP'
+    },
+    'ko-KR': {
+      deepgram: 'ko',
+      verbum: type === 'language' ? 'ko-KR' : 'ko', // Full for language, simplified for translateTo
+      webspeech: 'ko-KR'
+    },
+    'ru-RU': {
+      deepgram: 'ru',
+      verbum: type === 'language' ? 'ru-RU' : 'ru', // Full for language, simplified for translateTo
+      webspeech: 'ru-RU'
+    },
   };
-  
+
   return mapping[code]?.[service] || mapping['en-US'][service];
 };
 

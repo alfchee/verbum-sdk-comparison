@@ -1,22 +1,33 @@
 'use client';
 
+import { useState } from 'react';
+import { Language } from '@/types';
+import { TranslationLanguageSelector } from './TranslationLanguageSelector';
+
 interface TranscriptionCardProps {
   title: string;
   text: string;
+  translationText?: string;
   isDeepgram?: boolean;
   isRecording: boolean;
   latency?: number;
   accuracy?: number;
+  translationLanguage?: Language | null;
+  onTranslationLanguageChange?: (language: Language | null) => void;
 }
 
-export function TranscriptionCard({ 
-  title, 
-  text, 
-  isDeepgram = false, 
-  isRecording, 
-  latency, 
-  accuracy 
+export function TranscriptionCard({
+  title,
+  text,
+  translationText,
+  isDeepgram = false,
+  isRecording,
+  latency,
+  accuracy,
+  translationLanguage,
+  onTranslationLanguageChange
 }: TranscriptionCardProps) {
+  const [activeTab, setActiveTab] = useState<'transcription' | 'translation'>('transcription');
   const cardClass = isDeepgram 
     ? "border-indigo-400 deepgram-card" 
     : "border-fuchsia-500 verbum-card";
@@ -25,21 +36,62 @@ export function TranscriptionCard({
     ? "text-indigo-400" 
     : "text-fuchsia-500";
 
+  const isVerbum = !isDeepgram;
+  const hasTranslation = isVerbum && translationLanguage && translationText;
+
   return (
     <div className={`p-6 rounded-lg border-2 ${cardClass}`}>
       <div className="flex justify-between items-center mb-4">
         <h3 className={`text-xl font-bold ${titleClass}`}>{title}</h3>
-        {isRecording && (
-          <div className="flex items-center space-x-2">
-            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-            <span className="text-xs text-gray-400">Recording</span>
-          </div>
-        )}
+        <div className="flex items-center space-x-3">
+          {isVerbum && onTranslationLanguageChange && (
+            <TranslationLanguageSelector
+              selectedLanguage={translationLanguage || null}
+              onLanguageChange={onTranslationLanguageChange}
+              disabled={isRecording}
+            />
+          )}
+          {isRecording && (
+            <div className="flex items-center space-x-2">
+              <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+              <span className="text-xs text-gray-400">Recording</span>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Tabs for Verbum */}
+      {isVerbum && hasTranslation && (
+        <div className="flex space-x-1 mb-4">
+          <button
+            onClick={() => setActiveTab('transcription')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'transcription'
+                ? 'bg-fuchsia-500 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            Transcription
+          </button>
+          <button
+            onClick={() => setActiveTab('translation')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'translation'
+                ? 'bg-fuchsia-500 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            Translation
+          </button>
+        </div>
+      )}
       
       <div className="min-h-[120px] mb-4">
         <p className="text-gray-300 leading-relaxed">
-          {text || (isRecording ? "Listening..." : "Click 'Start Recording' to begin transcription")}
+          {isVerbum && activeTab === 'translation' && hasTranslation
+            ? (translationText || (isRecording ? "Translating..." : "Translation will appear here"))
+            : (text || (isRecording ? "Listening..." : "Click 'Start Recording' to begin transcription"))
+          }
         </p>
       </div>
 

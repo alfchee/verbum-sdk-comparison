@@ -12,6 +12,7 @@ export interface TranscriptionResult {
   confidence?: number;
   isFinal: boolean;
   latency?: number; // Per-utterance latency in milliseconds
+  translation?: string; // Translation text (only for Verbum)
 }
 
 export interface TranscriptionMetrics {
@@ -35,11 +36,12 @@ export interface STTServiceInterface {
   startTranscription(
     mediaStream: MediaStream,
     language: string,
-    onTranscription: (result: TranscriptionResult) => void
+    onTranscription: (result: TranscriptionResult) => void,
+    translateTo?: string
   ): Promise<void>;
-  
+
   stopTranscription(): void;
-  
+
   calculateMetrics(results: TranscriptionResult[]): TranscriptionMetrics;
 }
 

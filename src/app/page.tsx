@@ -19,10 +19,12 @@ const defaultLanguage: Language = SUPPORTED_LANGUAGES[0];
 
 export default function Home() {
   const [selectedLanguage, setSelectedLanguage] = useState<Language>(defaultLanguage);
+  const [translationLanguage, setTranslationLanguage] = useState<Language | null>(null);
   
   // Store state
   const deepgramText = useStoreState(state => state.deepgram.text);
   const verbumText = useStoreState(state => state.verbum.text);
+  const verbumTranslationText = useStoreState(state => state.verbum.finalTranslationText);
   const deepgramMetrics = useStoreState(state => state.deepgram.metrics);
   const verbumMetrics = useStoreState(state => state.verbum.metrics);
   
@@ -105,9 +107,24 @@ export default function Home() {
           console.log('🔗 Creating new Verbum service connection');
           verbumActions.setActive(true);
           verbumActions.setConnectionStatus('connecting');
-          
+
           verbumServiceRef.current = new VerbumService(verbumApiKey, store);
-          verbumServiceRef.current.startTranscription(mediaStream, selectedLanguage.code);
+          verbumServiceRef.current.startTranscription(
+            mediaStream,
+            selectedLanguage.code,
+            undefined,
+            translationLanguage?.code
+          );
+        } else {
+          // If translation language changed, restart the service
+          console.log('🔄 Translation language changed, restarting Verbum service');
+          verbumServiceRef.current.stopTranscription();
+          verbumServiceRef.current.startTranscription(
+            mediaStream,
+            selectedLanguage.code,
+            undefined,
+            translationLanguage?.code
+          );
         }
         
       } catch (error) {
@@ -133,7 +150,7 @@ export default function Home() {
         }
       }
     };
-  }, [isRecording, mediaStream, selectedLanguage.code, deepgramActions, verbumActions]);
+  }, [isRecording, mediaStream, selectedLanguage.code, translationLanguage?.code, deepgramActions, verbumActions]);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -203,10 +220,13 @@ export default function Home() {
             <TranscriptionCard
               title="Verbum Transcription"
               text={verbumText}
+              translationText={verbumTranslationText}
               isDeepgram={false}
               isRecording={isRecording}
               latency={verbumMetrics.latency !== 0 ? verbumMetrics.latency : undefined}
               accuracy={verbumMetrics.accuracy !== 0 ? verbumMetrics.accuracy : undefined}
+              translationLanguage={translationLanguage}
+              onTranslationLanguageChange={setTranslationLanguage}
             />
           </div>
         </div>
